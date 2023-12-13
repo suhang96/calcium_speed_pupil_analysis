@@ -203,30 +203,30 @@ class CalciumDataHandler:
 
     def calculate_cell_depth(self, y, x, image_size: int = 512) -> float:
         """
-        Calculate the cell depth.
+        Calculate the cell depth. Left-upper corner is upper than center depth; right-bottom corner is lower than center depth.
         
         Parameters:
             y: y-coordinate of the cell (row index, starting from top-left corner)
             x: x-coordinate of the cell (column index, starting from top-left corner)
             base_depth (float): The depth at the center diagonal of the image, usually negative in um. 
-                                The diagnal from top-left to bottom-right is the center diagonal.
-            delta_z: The change in depth from the center diagonal to the edges (e.g. bottom-left or top-right), in um
+                                The diagnal from top-right to bottom-left is the center diagonal.
+            delta_z: The change in depth from the center diagonal to the edges (e.g. bottom-right or top-left), in um
             image_size: The height/width of the square image, here is 512 pixels.
         
         Returns:
             float: The depth of the cell in um.
         """
-        # Calculate alpha, the angle between the vertical axis and the line to the top-right corner
-        alpha = math.atan2((image_size - 1) - x, y)
-        theta = math.radians(45) - alpha   
+        # Calculate alpha, the angle between the vertical axis and the line to the top-left corner
+        alpha = math.atan2(x, y)
+        theta = math.radians(45) - alpha 
         # Calculate L, the distance from the cell to the top-right corner
-        L = math.sqrt(((image_size - 1) - x)**2 + y**2)    
+        L = math.sqrt(x**2 + y**2)    
         # Calculate m, the projection length from the cell onto the axis perpendicular to the diagonal
         m = L * math.cos(theta)
         # Calculate the diagonal_ratio as the normalized depth along the diagonal
-        diagonal_ratio = m / (math.sqrt(2) * (image_size - 1))
+        diagonal_ratio = m / (math.sqrt(2) * image_size)
         # Interpolate to find the depth at the cell's position
-        self.depth = self.base_depth + (2 * self.delta_z * diagonal_ratio) - self.delta_z
+        self.depth = self.base_depth + self.delta_z - (2 * self.delta_z * diagonal_ratio)
         
         return self.depth
 
@@ -261,7 +261,10 @@ class CalciumDataHandler:
         if self.file_format not in supported_formats:
             raise ValueError(f"Unsupported file format: '{self.file_format}'. Supported formats: {supported_formats}")
 
-        fig.savefig(os.path.join(self.directory_path, f'{self.filename[1:]}_FOV.{self.file_format}'), dpi=300, transparent=True)
+        figure_dir = os.path.join(self.directory_path, 'Figure')
+        if not os.path.exists(figure_dir):
+            os.makedirs(figure_dir)
+        fig.savefig(os.path.join(figure_dir, f'{self.filename[1:]}_FOV.{self.file_format}'), dpi=300, transparent=True)
     # ---------------------------[SUPPORT FUNCTION FOR read_Suite2p]---------------------------------------------------
 
     # ---------------------------[SUPPORT FUNCTION FOR ∆F/F0 calculation]----------------------------------------------
@@ -346,7 +349,13 @@ class CalciumDataHandler:
             for j in range(4):
                 axs[i,j].set_xlabel('Time (s)')
             plt.tight_layout()
-            fig.savefig(os.path.join(self.directory_path, f'{self.filename[1:]}_signal.{self.file_format}'), dpi=300, transparent=True)
+
+            # Construct the full path for the figure directory
+            figure_dir = os.path.join(self.directory_path, 'Figure')
+            # Check if the directory exists, and create it if it doesn't
+            if not os.path.exists(figure_dir):
+                os.makedirs(figure_dir)
+            fig.savefig(os.path.join(figure_dir, f'{self.filename[1:]}_signal.{self.file_format}'), dpi=300, transparent=True)
 
         return standardized_dF_F0, baseline, dF_F0
     # ---------------------------[SUPPORT FUNCTION FOR ∆F/F0 calculation]----------------------------------------------
@@ -426,7 +435,13 @@ class SpeedDataHandler:
         plt.xlabel('Time(s)')
         plt.ylabel('Speed (cm/s)')
         plt.tight_layout()
-        fig.savefig(os.path.join(self.directory_path, f'{self.speed_filename[1:-4]}.{self.file_format}'), dpi=300, transparent=True)
+
+        # Construct the full path for the figure directory
+        figure_dir = os.path.join(self.directory_path, 'Figure')
+        # Check if the directory exists, and create it if it doesn't
+        if not os.path.exists(figure_dir):
+            os.makedirs(figure_dir)
+        fig.savefig(os.path.join(figure_dir, f'{self.speed_filename[1:-4]}.{self.file_format}'), dpi=300, transparent=True)
 
         return binned_speed
     # ---------------------------FUNCTION FOR extract speed data from wheel--------------------------------------------
@@ -450,10 +465,11 @@ class BehaviorDataHandler:
     def __init__(self, directory_path: str, 
                  behavior_filename: str, 
                  VIDEO_FRAMERATE: float,
+                 time_from_start: float = 2,
                  window_size: int = 19,
-                 velocity_threshold: float = -0.2,
+                 velocity_threshold: float = -0.15,
                  zero_threshold: float = 0.02,
-                 deviation_onset: int = 5,
+                 deviation_onset: int = 10,
                  deviation_offset: int = 15,
                  merge_threshold: int = 10,
                  y_lim: list = None,
@@ -477,6 +493,7 @@ class BehaviorDataHandler:
         self.directory_path = directory_path
         self.behavior_filename = behavior_filename
         self.video_framerate = VIDEO_FRAMERATE
+        self.time_from_start = time_from_start
 
         self.window_size = window_size
         self.velocity_threshold = velocity_threshold
@@ -484,7 +501,6 @@ class BehaviorDataHandler:
         self.deviation_onset = deviation_onset 
         self.deviation_offset = deviation_offset
         self.merge_threshold = merge_threshold
-            
         self.y_lim = y_lim
         self.file_format = file_format
     # ---------------------------FUNCTION FOR extract behavior data from Facemap---------------------------------------
@@ -514,7 +530,7 @@ class BehaviorDataHandler:
                 pupil_nan_smooth: smoothed pupil_nan - each is nframes
                 pupil_interpolated: list of pupil_nan outputs, after interpolation - each is nframes (Based on these timestamps and the associated pupil sizes (from the original, unsmoothed signal), a cubic-spline fit is generated. The original signal between t2 and t3 is replaced by the cubic spline. Thus, the signal is left unchanged, except for the blink period)
                 pupil_interpolated_smooth: Smoothed pupil_interpolated - each is nframes
-                pupil_com: center of mass in pixel, substracted from mean - each is nframes x 2     
+                pupil_com: center of mass in pixel, substracted from mean - each is nframes x 2 (Y, X)  
                 pupil_com_nan (after replacing blink with NaN) - each is nframes x 2
                 pupil_com_nan_smooth (smoothed pupil_com_nan) - each is nframes x 2
                 pupil_com_interpolated (with cubic-spline interpolation) - each is nframes x 2
@@ -539,13 +555,15 @@ class BehaviorDataHandler:
         video_running = self.remove_artifact(video_data['running'][0])
         blink_data = self.remove_artifact(video_data['blink'][0])
         pupil_area_smooth = self.remove_artifact(video_data['pupil'][0]['area_smooth']) # pupil - dict_keys(['area', 'com'(center-of-mass), 'axdir', 'axlen', 'area_smooth', 'com_smooth'])
-        pupil_com = video_data['pupil'][0]['com']
+        pupil_com = video_data['pupil'][0]['com'] # Y, X
         pupil_com = pupil_com - np.mean(pupil_com[0:20,:], axis=0)
         pupil_com = self.remove_artifact(pupil_com)
         # Compute z-scores
         blink_zscored = zscore(blink_data, ddof=1, nan_policy= 'omit')
         pupil_zscored = zscore(pupil_area_smooth, ddof=1, nan_policy= 'omit') # x/y movement of pupil is not controled because the stimuli is full screen
         self.length_of_data = len(pupil_zscored)
+
+
 
         # Handle blinks in the pupil data
         # self.blinks, self.pupil_area_with_nan, self.pupil_area_interpolated, self.pupil_com_with_nan, self.interpolated_pupil_com = self.handle_blinks()
@@ -621,7 +639,6 @@ class BehaviorDataHandler:
         # get velocity of blinks after smoothing blink_zscored
         blink_zscored_smooth = self.smooth_window(blink_data_zscored, window_type='hanning')
         blink_zscored_smooth_velocity = np.r_[0, np.diff(blink_zscored_smooth)]
-        
         # get blinks, merge the nearby ones and add deviation period -> get onset and offset of blinks
         merged_blinks = self.detect_blinks(blink_zscored_smooth_velocity)
         # get four timestamps on each blink
@@ -643,16 +660,16 @@ class BehaviorDataHandler:
             
         # do the same for pupil_com
         # get raw four pupil datapoints for each blink timestamp and interpolarate each blink between the blink onset and offset
-        pupil_com_timestamps_X = self.extract_pupil_from_timestamp(pupil_com[:,0], timestamps)
-        pupil_com_times_X_interpolation = self.cubic_spline_interpolation(timestamps, pupil_com_timestamps_X)
-        pupil_com_timestamps_Y = self.extract_pupil_from_timestamp(pupil_com[:,1], timestamps)
+        pupil_com_timestamps_Y = self.extract_pupil_from_timestamp(pupil_com[:,0], timestamps)
         pupil_com_times_Y_interpolation = self.cubic_spline_interpolation(timestamps, pupil_com_timestamps_Y)
+        pupil_com_timestamps_X = self.extract_pupil_from_timestamp(pupil_com[:,1], timestamps)
+        pupil_com_times_X_interpolation = self.cubic_spline_interpolation(timestamps, pupil_com_timestamps_X)
 
         pupil_com_nan = np.copy(pupil_com)
         pupil_com_interpolated = np.copy(pupil_com)
         for i, blink in enumerate(merged_blinks):
-            pupil_com_interpolated[blink[0]:blink[1], 0] = pupil_com_times_X_interpolation[i]
-            pupil_com_interpolated[blink[0]:blink[1], 1] = pupil_com_times_Y_interpolation[i]
+            pupil_com_interpolated[blink[0]:blink[1], 0] = pupil_com_times_Y_interpolation[i]
+            pupil_com_interpolated[blink[0]:blink[1], 1] = pupil_com_times_X_interpolation[i]
             pupil_com_nan[blink[0]:blink[1], :] = np.nan
         
         # get smoothed nan or interpolarated pupil data
@@ -672,7 +689,7 @@ class BehaviorDataHandler:
         pupil_com_interpolated, pupil_com_interpolated_smooth)
                    
     # ---------------------------[SUPPORT FUNCTION FOR read_video]---------------------------------------------------
-    def remove_artifact(self, signal: np.ndarray, time_from_start: float = 2) -> np.array:
+    def remove_artifact(self, signal: np.ndarray) -> np.array:
         '''
         Remove the artifact at the beginning of the recording and the last frame before stop; set those frames to nan.
 
@@ -683,7 +700,7 @@ class BehaviorDataHandler:
         Returns:
             np.array: The signal with artifact replaced with nan.
         '''
-        signal[:int(self.video_framerate*time_from_start)] = np.nan
+        signal[:int(self.video_framerate*self.time_from_start)] = np.nan
         # remove the last frame
         signal[-1] = np.nan
         return signal    
@@ -816,12 +833,18 @@ class BehaviorDataHandler:
             data extraction is needed.
             - Ensures that the extracted data at each timestamp is aligned with the events of interest, 
             which is crucial for subsequent analysis or interpolation.
+            - If the first timestamp is NaN, the method replaces it with the first available data point.
         """
 
         data_timestamps = np.zeros_like(timestamps)
         for i, timestamp in enumerate(timestamps):
             timestamp = [int(value) for value in timestamp]
             data_timestamps[i] = data[timestamp]
+        if np.isnan(data_timestamps[0,0]):
+            timestamps[0,0] = np.ceil(self.video_framerate * self.time_from_start)
+            data_timestamps[0,0] = data[int(timestamps[0,0])]
+        if np.isnan(data_timestamps[-1,-1]):
+            data_timestamps[-1,-1] = data[int(timestamps[-1,-2])]
         return data_timestamps
 
     def cubic_spline_interpolation(self, timestamps, data_timestamps):
@@ -848,18 +871,17 @@ class BehaviorDataHandler:
             - This approach is often applied in pupilometry to reconstruct pupil size during periods 
             of occlusion (e.g., blinks).
         """
-
-        data_times_interpolation =[]
+        
+        data_times_interpolation = []
         for i, timestamp in enumerate(timestamps):
             cs = CubicSpline(timestamp, data_timestamps[i])
-
             # Generate a range for plotting or further analysis
             x0 = int(timestamp[1])
             x1 = int(timestamp[2])
             xnew = np.linspace(x0, x1, x1-x0)
             ynew = cs(xnew)
-            
             data_times_interpolation.append(ynew)
+
         return data_times_interpolation           
     # ---------------------------[SUPPORT FUNCTION FOR read_video]---------------------------------------------------
 
@@ -925,19 +947,131 @@ class BehaviorDataHandler:
         axs[5].plot(x_axis, self.pupil_com[:,0], alpha=0.5, linewidth=0.45)
         axs[5].plot(x_axis, self.pupil_com_interpolated[:,0], color='blue', alpha=0.5, linewidth=0.35)
         axs[5].plot(x_axis, self.pupil_com_interpolated_smooth[:,0], color='red', alpha=0.5, linewidth=0.25)
-        axs[5].set_title('Pupil center of mass, X (black), interpolated (blue), smoothed (red)')
+        axs[5].set_title('Pupil center of mass, Y (black), interpolated (blue), smoothed (red)')
         axs[5].set_ylabel('Position\n(pixel)')
 
         axs[6].plot(x_axis, self.pupil_com[:,1], alpha=0.5, linewidth=0.45)
         axs[6].plot(x_axis, self.pupil_com_interpolated[:,1], color='blue', alpha=0.5, linewidth=0.35)
         axs[6].plot(x_axis, self.pupil_com_interpolated_smooth[:,1], color='red', alpha=0.5, linewidth=0.25)
-        axs[6].set_title('Pupil center of mass, Y (black), interpolated (blue), smoothed (red)')
+        axs[6].set_title('Pupil center of mass, X (black), interpolated (blue), smoothed (red)')
         axs[6].set_ylabel('Position\n(pixel)')
         
         axs[-1].set_xlabel('Time (s)')
 
         plt.tight_layout()
-        fig.savefig(os.path.join(self.directory_path, f'{self.behavior_filename[1:-8]}video.{self.file_format}'), dpi=1200, transparent=True)
+
+        figure_dir = os.path.join(self.directory_path, 'Figure')
+        if not os.path.exists(figure_dir):
+            os.makedirs(figure_dir)
+        fig.savefig(os.path.join(figure_dir, f'{self.behavior_filename[1:-8]}video.{self.file_format}'), dpi=1200, transparent=True)
     # ---------------------------FUNCTION FOR extract behavior data from Facemap---------------------------------------
 
-# class StimulusDataHandler:
+class StimulusDataHandler:
+    """
+    A class for processing stimulus data. This class is designed to read stimulus data from stumulus type input
+    It includes reading stimulus files and extracting stimulus sequences.
+
+    Attributes:
+        stimuli_file_path (str): Path to the directory containing stimulus files.
+        stimuli_type (str): Type of the stimulus.
+        stimuli_type_doc (str): Description of the stimulus type.
+        stimuli_file (str): Name of the stimulus file.
+        printInfo (bool): Whether to print information about the stimulus data. Defaults to True.
+    
+    Methods:
+        __init__(...): Initializes a new instance of the class.
+        read_StimuliType(...): Reads and processes stimulus.
+    """
+
+    def __init__(self, 
+                 stimuli_file_path: str, 
+                 stimuli_type: str, 
+                 printInfo: bool = True):
+        
+        self.stimuli_file_path = stimuli_file_path
+        self.stimuli_type = stimuli_type
+        self.printInfo = printInfo
+    
+    def set_stimuli_info(self):
+        """
+        Set stimulus information based on the provided stimulus type.
+
+        Returns:
+            tuple: stimuli_file (name of the stimulus file), stimuli_type_doc (description of the stimulus type)
+        """
+
+        # Handling different stimulus types
+        if self.stimuli_type == 'A':
+            self.stimuli_type_doc = 'spontaneous, dark'
+            self.stimuli_file = ''
+        elif self.stimuli_type == 'B':
+            self.stimuli_type_doc = 'spontaneous, gray'
+            self.stimuli_file = ''
+        elif 'C' in self.stimuli_type:
+            self.stimuli_type_doc = 'orientation tuning'
+            self.stimuli_file = r'\Orientation30_10reps_random' + self.stimuli_type[-1] + '.txt'
+        elif 'D' in self.stimuli_type:
+            self.stimuli_type_doc = 'orientation and contrast tuning'
+            self.stimuli_file = r'\Ori_Contrast_15reps_random' + self.stimuli_type[-1] + '.txt'
+        elif 'E' in self.stimuli_type:
+            if len(self.stimuli_type) > 1:
+                self.stimuli_type_doc = 'repetition, 80% contrast, repeat ' + self.stimuli_type[-1]
+            else:
+                self.stimuli_type_doc = 'repetition, 80% contrast'
+            self.stimuli_file = r'\repetition_0_180_5reps.txt'
+        elif 'F' in self.stimuli_type:
+            if len(self.stimuli_type) > 1:
+                self.stimuli_type_doc = 'repetition, 20% contrast, repeat ' + self.stimuli_type[-1]
+            else:
+                self.stimuli_type_doc = 'repetition, 20% contrast'
+            self.stimuli_file = r'\repetition_0_180_5reps.txt'
+        return self.stimuli_file, self.stimuli_type_doc 
+
+    def read_StimuliFile(self):
+        """
+        Read stimuli information from the provided file.
+
+        Returns:
+            tuple: stimuli_seq (all the stimuli in the file), stimuli_list (all stimuli types)
+        
+        Raises:
+            FileNotFoundError: If the stimuli file is not found.
+            ValueError: If the file format is not as expected.
+        """
+        try:
+            stimuli_seq = np.loadtxt(self.stimuli_file_path + self.stimuli_file, delimiter='\t')
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Stimuli file not found: {self.stimuli_file_path + self.stimuli_file}")
+        except ValueError:
+            raise ValueError(f"Error in reading the stimuli file: {self.stimuli_file_path + self.stimuli_file}")
+        stimuli_list = np.unique(stimuli_seq, axis=0)
+        return stimuli_seq, stimuli_list
+
+    def read_StimuliType(self):
+        """
+        Read stimuli information from the provided file.
+
+        Returns:
+            tuple: stimuli_seq (all the stimuli in the file), stimuli_list (all stimuli types), 
+                stimuli_file (name of the stimulus file), stimuli_type_doc (description of the stimulus type)
+        """
+
+        self.stimuli_file, self.stimuli_type_doc = self.set_stimuli_info()
+
+        if self.stimuli_type in ['A', 'B']:
+            stimuli_seq, stimuli_list = [],[]
+        else:
+            stimuli_seq, stimuli_list = self.read_StimuliFile()
+
+        if self.printInfo:
+            print("Stimuli Information")
+            print("stimuli_type:", self.stimuli_type)
+            print("stimuli_type_doc:", self.stimuli_type_doc)
+            print("stimuli_file:", self.stimuli_file)
+            print("stimuli_seq:", stimuli_seq)
+            if self.stimuli_type != 'A' and self.stimuli_type != 'B':
+                print("shape of 'stimuli_seq':", stimuli_seq.shape)
+            print("stimuli_list:", stimuli_list)
+            if self.stimuli_type != 'A' and self.stimuli_type != 'B':
+                print("shape of 'stimuli_list':", stimuli_list.shape)
+        return stimuli_seq, stimuli_list, self.stimuli_file, self.stimuli_type_doc 
